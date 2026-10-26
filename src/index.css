@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 40px 15px rgba(255, 200, 0, 0.5), 0 0 80px 30px rgba(255, 150, 0, 0.3); }
+  50% { box-shadow: 0 0 50px 20px rgba(255, 200, 0, 0.6), 0 0 100px 40px rgba(255, 150, 0, 0.4); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Custom range slider styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: #374151;
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #facc15;
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(250, 204, 21, 0.5);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #facc15;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 6px rgba(250, 204, 21, 0.5);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 3px;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
