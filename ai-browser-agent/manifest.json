@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "AI Browser Agent",
-  "version": "2.0.0",
-  "description": "Autonomous AI agent that opens tabs and completes web tasks (click, type, navigate) using Gemini, Claude, Groq or OpenRouter APIs",
-  "permissions": ["tabs", "scripting", "storage"],
+  "version": "3.0.0",
+  "description": "Autonomous AI browsing agent with visual control, real mouse movement (CDP), accessibility-tree snapshots, multi-tab control, form automation, drag & drop, human approval and activity timeline. Uses Gemini, Claude, Groq or OpenRouter APIs.",
+  "permissions": ["tabs", "scripting", "storage", "debugger", "tabGroups"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
