@@ -12,6 +12,7 @@ Give it a task, and it opens its own tab, reads the page, clicks, types, navigat
 - 🎯 Live highlight of elements being clicked so you can watch the agent work
 - 📜 Real-time activity log (thoughts + actions + results) in the popup
 - ⏹ Stop button anytime; settings (provider/key/model) saved locally via `chrome.storage`
+- ⚡ **Parallel multi-worker mode (v4)**: complex tasks are auto-decomposed by a Planner into up to 3 subtasks. Independent read-only research subtasks run **simultaneously in separate tabs** (Promise.allSettled fan-out), then a Synthesizer merges all worker findings into one final answer. Toggle with the "Parallel mode" checkbox. Risky/state-changing steps always stay sequential & supervised.
 
 ## 🚀 Install (Developer Mode)
 
