@@ -1,201 +1,58 @@
-# AI Browser Agent - Chrome Extension
+# AI Browser Agent (Chrome Extension)
 
-একটি autonomous AI browser agent যেটা Chrome extension হিসেবে install করে browser এ automatically tasks complete করতে পারবে। Gemini, Claude, Groq, এবং OpenRouter API support করে।
+Autonomous AI browsing agent — inspired by **Claude for Chrome** and **browser-use**.
+Give it a task, and it opens its own tab, reads the page, clicks, types, navigates, and reports back the answer.
 
-## Features
+## ✨ Features
 
-- 🤖 **Autonomous Browsing**: AI agent নিজে নিজে browser navigate করে, clicks করে, type করে
-- 🔌 **Multi-Provider Support**: Gemini, Claude, Groq, OpenRouter - যেকোনো একটা ব্যবহার করুন
-- 🎯 **Task-Based**: শুধু task লিখুন, agent বাকি সব করবে
-- 📊 **Real-time Monitoring**: Live status এবং action history দেখুন
-- 💾 **Settings Persistence**: API keys এবং settings save থাকে
-- 🔄 **Smart Actions**: Click, type, navigate, scroll, wait - সব automatically
+- 🤖 **4 LLM providers**: Google Gemini, Anthropic Claude, Groq, OpenRouter (bring your own API key)
+- 🌐 **Autonomous loop**: observe page → LLM decides action → execute → repeat (max 25 steps)
+- 🖱️ **Actions**: click, type (+Enter), select dropdown, scroll, extract text, navigate, done
+- 🔢 **Numbered element snapshots** (browser-use style): the model sees `[12] <button> "Sign in"` and acts by index
+- 🎯 Live highlight of elements being clicked so you can watch the agent work
+- 📜 Real-time activity log (thoughts + actions + results) in the popup
+- ⏹ Stop button anytime; settings (provider/key/model) saved locally via `chrome.storage`
 
-## Installation
+## 🚀 Install (Developer Mode)
 
-1. Download বা clone করুন এই folder টা
-2. Chrome browser open করুন
-3. `chrome://extensions/` এ যান
-4. Top-right এ "Developer mode" toggle ON করুন
-5. "Load unpacked" button এ click করুন
-6. `ai-browser-agent` folder টা select করুন
-7. Extension install হয়ে যাবে! ✅
+1. Open `chrome://extensions/`
+2. Enable **Developer mode** (top right)
+3. Click **Load unpacked** → select this `ai-browser-agent` folder
+4. Pin the extension, open the popup
 
-## Usage
+## 🧑‍💻 Usage
 
-### 1. API Key Setup
+1. Pick provider → paste API key → (optionally change model)
+2. Type a task, e.g.:
+   - *"Search Google for 'latest Python version' and tell me what it is"*
+   - *"Go to github.com/trending and list the top 3 repos today"*
+3. Press **▶ Start Agent** — a new tab opens and the agent drives it.
+4. Watch the log; final answer appears with 🏁.
 
-Extension icon এ click করুন, তারপর:
+### API keys
+| Provider | Where to get key | Default model |
+|---|---|---|
+| Gemini | https://aistudio.google.com/apikey | `gemini-2.0-flash` |
+| Claude | https://console.anthropic.com | `claude-sonnet-4-20250514` |
+| Groq | https://console.groq.com/keys | `llama-3.3-70b-versatile` |
+| OpenRouter | https://openrouter.ai/keys | `anthropic/claude-3.5-sonnet` |
 
-**Provider select করুন:**
-- Google Gemini (recommended for testing)
-- Anthropic Claude
-- Groq
-- OpenRouter
+## 🗂 Files
 
-**API Key দিন:**
-- Gemini: https://aistudio.google.com/app/apikey থেকে free key নিন
-- Claude: https://console.anthropic.com/settings/keys
-- Groq: https://console.groq.com/keys
-- OpenRouter: https://openrouter.ai/settings/keys
+- `manifest.json` — MV3 manifest (permissions: tabs, scripting, storage, `<all_urls>`)
+- `background.js` — service worker: agent loop + provider adapters (Gemini/Claude/Groq/OpenRouter)
+- `page_agent.js` — injected DOM automation engine (snapshot builder + action executor)
+- `popup.html` / `popup.js` — UI: settings, task input, live log
 
-**Model Name:**
-- Default models auto-fill হবে, বা custom model use করুন
+## ⚠️ Notes & Limitations
 
-### 2. Task Description
+- Cannot operate on `chrome://`, Web Store, or other protected pages (agent auto-avoids them).
+- Claude's API blocks browser CORS calls only from web pages — from an extension service worker it works because `host_permissions` grants cross-origin fetch. If your Claude key setup rejects extension traffic, use OpenRouter's `anthropic/...` models instead.
+- Keep API keys private; they are stored in `chrome.storage.local` on your machine only.
+- For sensitive sites (banking, email), stop the agent before it acts — it will do whatever the model decides.
 
-Task box এ যা করতে চান লিখুন। Examples:
+## 🔮 Ideas for v3
 
-```
-Search Google for "latest AI news" and summarize the top 3 articles
-```
-
-```
-Go to GitHub and find repositories about "machine learning" with most stars
-```
-
-```
-Search Amazon for wireless headphones under $50 and tell me the cheapest option
-```
-
-```
-Find Python documentation about async functions and list the main methods
-```
-
-### 3. Start Agent
-
-"Start Agent" button এ click করুন। Agent:
-- New tab খুলবে
-- Automatically browse করবে
-- Tasks complete করবে
-- Real-time actions show করবে
-
-## Architecture
-
-```
-ai-browser-agent/
-├── manifest.json       # Extension configuration
-├── background.js       # Service worker - agent logic & API calls
-├── content.js          # Content script - page interaction
-├── popup.html          # UI interface
-├── popup.js            # Popup logic
-└── icons/              # Extension icons
-    ├── icon16.png
-    ├── icon48.png
-    └── icon128.png
-```
-
-## How It Works
-
-1. **User Input**: Task description + API config from popup
-2. **Background Script**: 
-   - Opens new tab
-   - Gets page content via scripting API
-   - Builds prompt with current state
-   - Calls AI API (Gemini/Claude/Groq/OpenRouter)
-   - Parses JSON response
-   - Executes action (click/type/navigate)
-   - Loops until task complete
-3. **Content Script**: Enhanced DOM interaction helpers
-4. **Popup**: Real-time status updates and history
-
-## AI Decision Loop
-
-প্রতি step এ agent:
-1. Current page extract করে (title, URL, content, links, buttons)
-2. History সহ prompt তৈরি করে
-3. AI থেকে next action JSON পায়
-4. Action execute করে
-5. Wait করে page load হওয়ার জন্য
-6. Repeat until "complete" action
-
-## Supported Actions
-
-- `navigate`: URL change করে
-- `click`: Element text দিয়ে click করে
-- `type`: Input field এ text type করে  
-- `scroll`: Page scroll করে
-- `wait`: কিছুক্ষণ wait করে
-- `complete`: Task শেষ হয়
-
-## Example Response Format
-
-AI এর output JSON format এ হয়:
-
-```json
-{
-  "type": "click",
-  "target": "Sign In",
-  "reason": "Need to login to access dashboard"
-}
-```
-
-## Troubleshooting
-
-**Agent doesn't start:**
-- Check API key is correct
-- Verify you have credits/quota
-- Look at console errors (F12 → Console)
-
-**Actions not working:**
-- Some sites block automation
-- Try different provider/model
-- Complex SPAs may need more steps
-
-**Rate limits:**
-- Increase delay between steps in background.js (line 80)
-- Use cheaper/faster models like Gemini Flash
-
-## Security Notes
-
-⚠️ **Important:**
-- API keys local storage এ save হয় (chrome.storage.local)
-- Keys কখনো external server এ যায় না
-- শুধু AI API calls এর জন্য ব্যবহার হয়
-- Public repo এ keys commit করবেন না
-
-## Customization
-
-**Change step delay:**
-```javascript
-// background.js line 80
-setTimeout(() => executeAgentStep(task, apiConfig), 2000); // 2 seconds
-```
-
-**Add new provider:**
-```javascript
-// background.js callAIAPI() function
-else if (provider === 'custom') {
-  url = 'https://api.custom.com/v1/chat';
-  // ... add implementation
-}
-```
-
-**Modify max history:**
-```javascript
-// background.js buildPrompt()
-const historyStr = history.slice(-10) // Keep last 10 steps
-```
-
-## Performance Tips
-
-- **Gemini Flash**: Fastest and cheapest for testing
-- **Claude 3.5 Sonnet**: Best reasoning quality
-- **Groq Llama**: Very fast inference
-- **OpenRouter**: Access to many models
-
-## License
-
-MIT License - Free to use and modify
-
-## Credits
-
-Built with modern web APIs:
-- Chrome Extension Manifest V3
-- Fetch API for AI providers
-- chrome.scripting for DOM manipulation
-- chrome.tabs for navigation control
-
----
-
-**Enjoy your autonomous AI browser agent! 🚀**
+- Screenshot + vision models (Gemini vision / Claude) for true visual grounding
+- Multi-tab support & history memory between steps
+- Site allow/deny lists and per-action confirmation mode

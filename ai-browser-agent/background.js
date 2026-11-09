@@ -1,269 +1,275 @@
-// Background Service Worker - AI Browser Agent
+// Background Service Worker - AI Browser Agent (v2)
+// Claude-for-Chrome / browser-use style loop:
+//   observe page -> LLM decides next action -> execute -> repeat until "done"
 
-let agentState = {
+const state = {
   isRunning: false,
-  currentTask: null,
+  task: null,
   tabId: null,
-  history: []
+  apiConfig: null,
+  history: [],      // [{ step, thought, action, result }]
+  maxSteps: 25,
 };
 
-// Listen for messages from popup and content script
+const BLOCKED_HOSTS = ['chrome.google.com', 'chromewebstore.google.com', 'chrome://', 'edge://', 'about:'];
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'startAgent') {
-    startAgent(request.task, request.apiConfig);
-    sendResponse({ status: 'started' });
-  } else if (request.action === 'stopAgent') {
-    stopAgent();
-    sendResponse({ status: 'stopped' });
-  } else if (request.action === 'getAgentState') {
-    sendResponse(agentState);
-  } else if (request.action === 'pageContentExtracted') {
-    handlePageContent(request.content, request.url);
-  }
-  return true;
+  (async () => {
+    try {
+      if (request.action === 'startAgent') {
+        await startAgent(request.task, request.apiConfig);
+        sendResponse({ ok: true });
+      } else if (request.action === 'stopAgent') {
+        stopAgent();
+        sendResponse({ ok: true });
+      } else if (request.action === 'getState') {
+        sendResponse({ ...state, history: state.history.slice(-30) });
+      }
+    } catch (e) {
+      sendResponse({ ok: false, error: String(e && e.message || e) });
+    }
+  })();
+  return true; // async
 });
 
+// Broadcast progress so popup can render live log
+function notify(type, payload = {}) {
+  chrome.runtime.sendMessage({ action: 'event', type, ...payload }).catch(() => {});
+}
+
 async function startAgent(task, apiConfig) {
-  agentState.isRunning = true;
-  agentState.currentTask = task;
-  agentState.history = [];
-  
-  // Open a new tab
-  const tab = await chrome.tabs.create({ url: 'about:blank', active: true });
-  agentState.tabId = tab.id;
-  
-  // Start the agent loop
-  await executeAgentStep(task, apiConfig);
+  if (!task || !apiConfig?.apiKey) throw new Error('Task and API key are required');
+  stopAgentState();
+  state.isRunning = true;
+  state.task = task;
+  state.apiConfig = apiConfig;
+  state.history = [];
+
+  const tab = await chrome.tabs.create({ url: 'https://www.google.com', active: true });
+  state.tabId = tab.id;
+  notify('started', { task, tabId: tab.id });
+
+  runLoop().catch(err => {
+    notify('error', { message: String(err.message || err) });
+  }).finally(() => {
+    state.isRunning = false;
+    notify('finished', {});
+  });
 }
 
 function stopAgent() {
-  agentState.isRunning = false;
-  agentState.currentTask = null;
-  if (agentState.tabId) {
-    chrome.tabs.remove(agentState.tabId).catch(() => {});
-    agentState.tabId = null;
-  }
+  state.isRunning = false;
+  notify('stopped', {});
+}
+function stopAgentState() {
+  state.isRunning = false;
+  state.history = [];
 }
 
-async function executeAgentStep(task, apiConfig) {
-  if (!agentState.isRunning) return;
-  
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function isBlockedUrl(url = '') {
+  return BLOCKED_HOSTS.some(b => url.startsWith(b) || url.includes(b + '/'));
+}
+
+// Ensure content script + page_agent are available in the tab
+async function ensureInjected(tabId) {
   try {
-    // Get current page content
-    const pageContent = await getPageContent();
-    
-    // Build prompt for AI
-    const prompt = buildPrompt(task, pageContent, agentState.history);
-    
-    // Call AI API
-    const aiResponse = await callAIAPI(prompt, apiConfig);
-    
-    // Parse AI response and execute action
-    const action = parseAIAction(aiResponse);
-    
-    agentState.history.push({
-      step: agentState.history.length + 1,
-      action: action,
-      reasoning: aiResponse
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => typeof window.__AI_PAGE_AGENT__ !== 'undefined',
     });
-    
-    // Execute the action
-    await executeAction(action);
-    
-    // Check if task is complete
-    if (action.type !== 'complete') {
-      // Wait a bit then continue
-      setTimeout(() => executeAgentStep(task, apiConfig), 2000);
-    } else {
-      agentState.isRunning = false;
+    if (res?.[0]?.result) return;
+  } catch (e) { /* not injected yet */ }
+
+  await chrome.scripting.executeScript({ target: { tabId }, files: ['page_agent.js'] });
+}
+
+async function getSnapshot(tabId) {
+  await ensureInjected(tabId);
+  const res = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => window.__AI_PAGE_AGENT__.getPageSnapshot(14000),
+  });
+  return res?.[0]?.result || 'NO SNAPSHOT';
+}
+
+async function execAction(tabId, action) {
+  await ensureInjected(tabId);
+  const res = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async (a) => {
+      try { return await window.__AI_PAGE_AGENT__.executeAction(a); }
+      catch (e) { return { ok: false, detail: String(e.message || e) }; }
+    },
+    args: [action],
+  });
+  return res?.[0]?.result || { ok: false, detail: 'execution failed' };
+}
+
+async function waitTabComplete(tabId, timeoutMs = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return false;
+    if (tab.status === 'complete') return true;
+    await sleep(400);
+  }
+  return true;
+}
+
+// ---- The agent loop ----
+async function runLoop() {
+  for (let step = 1; step <= state.maxSteps && state.isRunning; step++) {
+    const tabId = state.tabId;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) { notify('error', { message: 'Agent tab was closed' }); return; }
+    if (isBlockedUrl(tab.url)) {
+      record(step, 'blocked', { intent: 'navigate', url: 'https://www.google.com' }, 'Cannot operate on browser-protected pages');
+      await chrome.tabs.update(tabId, { url: 'https://www.google.com' });
+      await waitTabComplete(tabId);
+      continue;
     }
-    
-  } catch (error) {
-    console.error('Agent error:', error);
-    agentState.isRunning = false;
+
+    await waitTabComplete(tabId);
+    const snapshot = await getSnapshot(tabId);
+    const decision = await askLLM(snapshot, step);
+
+    notify('step', { step, thought: decision.thought, action: decision.action || { intent: decision.intent, url: decision.url } });
+
+    if (decision.intent === 'done') {
+      record(step, 'done', {}, decision.answer || 'Task complete');
+      notify('answer', { answer: decision.answer || 'Task complete.' });
+      return;
+    }
+
+    let result;
+    if (decision.intent === 'navigate') {
+      await chrome.tabs.update(tabId, { url: decision.url });
+      await waitTabComplete(tabId);
+      result = { ok: true, detail: 'Navigated to ' + decision.url };
+    } else {
+      result = await execAction(tabId, decision.action);
+      // give SPA / navigation a moment
+      await sleep(800);
+      await waitTabComplete(tabId, 8000);
+    }
+
+    record(step, decision.intent, decision.action || { url: decision.url }, result.detail || JSON.stringify(result).slice(0, 200), decision.thought);
+    notify('action_result', { step, result });
   }
+  notify('answer', { answer: 'Stopped: reached max steps without completing the task.' });
 }
 
-async function getPageContent() {
-  if (!agentState.tabId) return '';
-  
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: agentState.tabId },
-      func: () => {
-        return {
-          title: document.title,
-          url: window.location.href,
-          content: document.body.innerText.substring(0, 5000),
-          links: Array.from(document.querySelectorAll('a')).slice(0, 50).map(a => ({
-            text: a.innerText.trim(),
-            href: a.href
-          })),
-          buttons: Array.from(document.querySelectorAll('button, input[type="submit"]')).slice(0, 30).map(b => ({
-            text: b.innerText || b.value,
-            id: b.id,
-            className: b.className
-          }))
-        };
-      }
+function record(step, intent, action, result, thought = '') {
+  state.history.push({ step, intent, action, result, thought });
+}
+
+// ---- LLM providers ----
+function buildSystemPrompt() {
+  return `You are an autonomous web-browsing agent operating a real Chrome tab, similar to "Claude for Chrome".
+Current user task: "${state.task}"
+
+You receive a page snapshot: URL, TITLE, visible text, and numbered interactive elements like [12] <button> "Sign in".
+On each turn, reply with ONLY a JSON object (no markdown fences, no extra text) of one of these shapes:
+
+{"thought":"brief reasoning","intent":"click","index":12}
+{"thought":"...","intent":"type","index":5,"text":"query here","enter":true}
+{"thought":"...","intent":"select","index":7,"option":"Option label"}
+{"thought":"...","intent":"scroll","direction":"down","pixels":600}
+{"thought":"...","intent":"extract","selector":".product-title"}
+{"thought":"...","intent":"navigate","url":"https://example.com"}
+{"thought":"...","intent":"done","answer":"final answer for the user"}
+
+Rules:
+- Use EXACTLY ONE action per turn. Prefer searching via Google when the task involves finding information.
+- Element indexes refer to the latest snapshot only.
+- If the task is finished or impossible, use "done" with a helpful answer.
+- Never access chrome:// or web store pages.`;
+}
+
+function buildUserPrompt(snapshot, step) {
+  const recent = state.history.slice(-6).map(h =>
+    `step ${h.step}: ${h.intent} -> ${h.result}`).join('\n');
+  return `Step ${step}. Recent actions:\n${recent || '(none)'}\n\nCURRENT PAGE SNAPSHOT:\n${snapshot}\n\nRespond with one JSON action.`;
+}
+
+async function askLLM(snapshot, step) {
+  const cfg = state.apiConfig;
+  const messages = [
+    { role: 'system', content: buildSystemPrompt() },
+    { role: 'user', content: buildUserPrompt(snapshot, step) },
+  ];
+  const raw = await callProvider(cfg, messages);
+  return parseAction(raw);
+}
+
+async function callProvider(cfg, messages) {
+  const sys = messages[0].content, user = messages[1].content;
+
+  if (cfg.provider === 'gemini') {
+    const model = cfg.model || 'gemini-2.0-flash';
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cfg.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: sys + '\n\n' + user }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
+      }),
     });
-    return results[0].result;
-  } catch (error) {
-    console.error('Error getting page content:', error);
-    return { title: '', url: '', content: 'Unable to access page', links: [], buttons: [] };
+    const j = await r.json();
+    return j?.candidates?.[0]?.content?.parts?.[0]?.text || throwErr(j);
   }
-}
 
-function buildPrompt(task, pageContent, history) {
-  const historyStr = history.slice(-5).map(h => 
-    `Step ${h.step}: ${h.action.type} - ${h.action.reason || ''}`
-  ).join('\n');
-  
-  return `You are an AI browser agent tasked with completing this goal: "${task}"
-
-Current page information:
-- Title: ${pageContent.title}
-- URL: ${pageContent.url}
-- Content preview: ${pageContent.content.substring(0, 1000)}
-- Available links: ${JSON.stringify(pageContent.links.slice(0, 20))}
-- Available buttons: ${JSON.stringify(pageContent.buttons.slice(0, 15))}
-
-Action history:
-${historyStr}
-
-Based on the current state, decide what action to take next. Respond ONLY with a JSON object in this format:
-{
-  "type": "click|type|navigate|scroll|wait|complete",
-  "target": "description of element or URL",
-  "value": "text to type (if applicable)",
-  "reason": "brief explanation"
-}
-
-Choose the most logical next step to accomplish the goal.`;
-}
-
-async function callAIAPI(prompt, apiConfig) {
-  const { provider, apiKey, model } = apiConfig;
-  
-  let url, headers, body;
-  
-  if (provider === 'gemini') {
-    url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    headers = { 'Content-Type': 'application/json' };
-    body = JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }]
+  if (cfg.provider === 'claude') {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: cfg.model || 'claude-sonnet-4-20250514',
+        max_tokens: 700,
+        system: sys,
+        messages: [{ role: 'user', content: user }],
+      }),
     });
-  } else if (provider === 'claude') {
-    url = 'https://api.anthropic.com/v1/messages';
-    headers = {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    };
-    body = JSON.stringify({
-      model: model,
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }]
-    });
-  } else if (provider === 'groq' || provider === 'openrouter') {
-    const baseUrl = provider === 'groq' 
+    const j = await r.json();
+    return j?.content?.[0]?.text || throwErr(j);
+  }
+
+  if (cfg.provider === 'groq' || cfg.provider === 'openrouter') {
+    const base = cfg.provider === 'groq'
       ? 'https://api.groq.com/openai/v1/chat/completions'
       : 'https://openrouter.ai/api/v1/chat/completions';
-    url = baseUrl;
-    headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    };
-    body = JSON.stringify({
-      model: model,
-      messages: [{ role: 'user', content: prompt }]
+    const defaultModel = cfg.provider === 'groq' ? 'llama-3.3-70b-versatile' : 'anthropic/claude-3.5-sonnet';
+    const r = await fetch(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: cfg.model || defaultModel, messages, temperature: 0.2, max_tokens: 700 }),
     });
+    const j = await r.json();
+    return j?.choices?.[0]?.message?.content || throwErr(j);
   }
-  
-  const response = await fetch(url, { method: 'POST', headers, body });
-  const data = await response.json();
-  
-  // Extract text based on provider
-  if (provider === 'gemini') {
-    return data.candidates[0].content.parts[0].text;
-  } else if (provider === 'claude') {
-    return data.content[0].text;
-  } else {
-    return data.choices[0].message.content;
-  }
+
+  throw new Error('Unknown provider: ' + cfg.provider);
 }
 
-function parseAIAction(response) {
-  try {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-  } catch (e) {
-    console.error('Failed to parse action:', e);
-  }
-  return { type: 'wait', reason: 'Could not parse action' };
+function throwErr(j) {
+  throw new Error('API error: ' + JSON.stringify(j).slice(0, 300));
 }
 
-async function executeAction(action) {
-  if (!agentState.tabId) return;
-  
-  switch (action.type) {
-    case 'navigate':
-      await chrome.tabs.update(agentState.tabId, { url: action.target });
-      break;
-      
-    case 'click':
-      await chrome.scripting.executeScript({
-        target: { tabId: agentState.tabId },
-        func: (selector) => {
-          const elements = document.querySelectorAll('a, button');
-          for (let el of elements) {
-            if (el.innerText.includes(selector) || el.textContent.includes(selector)) {
-              el.click();
-              return true;
-            }
-          }
-          return false;
-        },
-        args: [action.target]
-      });
-      break;
-      
-    case 'type':
-      await chrome.scripting.executeScript({
-        target: { tabId: agentState.tabId },
-        func: (targetText, value) => {
-          const inputs = document.querySelectorAll('input, textarea');
-          for (let input of inputs) {
-            const label = input.previousElementSibling?.innerText || 
-                         input.placeholder || 
-                         input.name || '';
-            if (label.includes(targetText) || input.id.includes(targetText)) {
-              input.value = value;
-              input.dispatchEvent(new Event('input', { bubbles: true }));
-              return true;
-            }
-          }
-          return false;
-        },
-        args: [action.target, action.value]
-      });
-      break;
-      
-    case 'scroll':
-      await chrome.scripting.executeScript({
-        target: { tabId: agentState.tabId },
-        func: () => window.scrollBy(0, window.innerHeight)
-      });
-      break;
-      
-    case 'wait':
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      break;
-      
-    case 'complete':
-      console.log('Task completed:', action.reason);
-      break;
+function parseAction(raw) {
+  // extract first JSON object from the model output
+  const m = String(raw).match(/\{[\s\S]*\}/);
+  if (!m) return { intent: 'scroll', thought: 'unparseable output, scrolling', action: { intent: 'scroll', direction: 'down' } };
+  let obj;
+  try { obj = JSON.parse(m[0]); } catch (e) {
+    return { intent: 'scroll', thought: 'bad json, scrolling', action: { intent: 'scroll', direction: 'down' } };
   }
+  const intent = obj.intent;
+  if (intent === 'done') return { intent: 'done', thought: obj.thought, answer: obj.answer };
+  if (intent === 'navigate') return { intent: 'navigate', thought: obj.thought, url: obj.url };
+  if (['click', 'type', 'select', 'scroll', 'extract'].includes(intent)) {
+    return { intent, thought: obj.thought, action: obj };
+  }
+  return { intent: 'scroll', thought: 'unknown intent: ' + intent, action: { intent: 'scroll', direction: 'down' } };
 }
