@@ -31,6 +31,19 @@ Give it a task, and it opens its own tab, reads the page, clicks, types, navigat
 
 ### API keys (কোন কোন site এর key লাগবে)
 
+> **Apatoto regular free trial diyei cholbe — kono paid plan lagbe na.** Niche kon provider er free limit koto, ta likhe dilam:
+>
+> | Provider | Free limit (trial/tier) | Koto din cholbe |
+> |---|---|---|
+> | **Gemini** ⭐ recommended | Gemini 2.0 Flash: **15 requests/min, ~1500 requests/day FREE**, card lagbe na | Anonto kal (renewable daily) |
+> | **Groq** | Llama-3.3-70B: **~8000 tokens/min, free daily quota (~hajar hajar request)** | Daily reset hoy, onek din cholbe |
+> | **OpenRouter** | $1 free credits (onek free model o ache: `meta-llama/llama-3.3-70b-instruct:free`) | Jotokhon credit thakbe |
+> | **Claude** (console.anthropic.com) | Free tier nei — demo/key holeo pay-as-you-go; Playground e free try kora jay | Paid only |
+> | Tavily (optional) | 1000 credits/month free | Monthly reset |
+> | Serper (optional) | 2500 credits ekbar | Ekbare sesh |
+>
+> **Sobcheye bhalo free combo:** Gemini (aistudio.google.com/apikey) main brain + Groq backup. Duitai free, daily quota roroe, ar extension settings theke provider change kora jay. Claude key tele paise lagbe — apatoto free-te Gemini/Groq-i enough.
+
 **Abosshok (একটিই বেছে নিন — agent er "brain"):**
 | Provider | Where to get key | Default model |
 |---|---|---|
