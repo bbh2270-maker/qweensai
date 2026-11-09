@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "AI Browser Agent",
+  "version": "3.0.0",
+  "description": "Autonomous AI browsing agent with visual control, real mouse movement (CDP), accessibility-tree snapshots, multi-tab control, form automation, drag & drop, human approval and activity timeline. Uses Gemini, Claude, Groq or OpenRouter APIs.",
+  "permissions": ["tabs", "scripting", "storage", "debugger", "tabGroups"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Browser Agent"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
