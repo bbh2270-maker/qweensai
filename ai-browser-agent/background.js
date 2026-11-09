@@ -32,6 +32,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         state.paused = false;
         notify('resumed', {});
         sendResponse({ ok: true });
+      } else if (request.action === 'pauseAgent') {
+        if (state.isRunning) {
+          state.paused = true;
+          notify('paused', {});
+        }
+        sendResponse({ ok: true });
       } else if (request.action === 'approval') {
         // popup answered a pending human-approval request
         const pending = state.awaitingApproval;

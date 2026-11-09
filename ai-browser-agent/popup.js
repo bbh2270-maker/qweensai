@@ -1,4 +1,6 @@
-// Popup - AI Browser Agent v2
+// Popup - AI Browser Agent v3
+// Renders the agent-thinking stream as an activity timeline, and exposes
+// Stop / Pause-Resume controls plus Human Approval prompts.
 
 const el = {
   provider: document.getElementById('provider'),
@@ -6,10 +8,15 @@ const el = {
   model: document.getElementById('model'),
   task: document.getElementById('task'),
   startBtn: document.getElementById('startBtn'),
+  controlRow: document.getElementById('controlRow'),
+  pauseBtn: document.getElementById('pauseBtn'),
   stopBtn: document.getElementById('stopBtn'),
   statusBadge: document.getElementById('statusBadge'),
   log: document.getElementById('log'),
 };
+
+let agentRunning = false;
+let agentPaused = false;
 
 const defaultModels = {
   gemini: 'gemini-2.0-flash',
@@ -45,11 +52,14 @@ function addLog(cls, html) {
   el.log.scrollTop = el.log.scrollHeight;
 }
 
-function setStatus(running) {
-  el.statusBadge.textContent = running ? 'running' : 'idle';
-  el.statusBadge.classList.toggle('running', running);
+function setStatus(running, paused = false) {
+  agentRunning = running;
+  agentPaused = paused;
+  el.statusBadge.textContent = running ? (paused ? 'paused' : 'running') : 'idle';
+  el.statusBadge.classList.toggle('running', running && !paused);
   el.startBtn.style.display = running ? 'none' : 'block';
-  el.stopBtn.style.display = running ? 'block' : 'none';
+  el.controlRow.style.display = running ? 'flex' : 'none';
+  if (running) el.pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
 }
 
 // ---- events from background ----
@@ -67,6 +77,21 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'action_result':
       addLog('', `✅ Step ${msg.step}: ${escapeHtml(String(msg.result?.detail || msg.result?.data || '')) .slice(0, 200)}`);
       break;
+    case 'approval_request':
+      // Human Approval: pause the loop in background until user answers
+      renderApprovalPrompt(msg);
+      break;
+    case 'approval_result':
+      addLog('', `${msg.approved ? '👍' : '👎'} Step ${msg.step} ${msg.approved ? 'approved' : 'rejected'}${msg.note ? ': ' + escapeHtml(msg.note) : ''}`);
+      break;
+    case 'paused':
+      setStatus(true, true);
+      addLog('thought', '⏸ Paused by user.');
+      break;
+    case 'resumed':
+      setStatus(true, false);
+      addLog('thought', '▶ Resumed.');
+      break;
     case 'answer':
       addLog('answer', `🏁 <b>Final answer:</b><br>${escapeHtml(msg.answer)}`);
       setStatus(false);
@@ -82,6 +107,28 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
+// Build an inline Approve / Reject bar for a pending human-approval request
+function renderApprovalPrompt(info) {
+  const div = document.createElement('div');
+  div.className = 'entry action';
+  div.innerHTML =
+    `⚠️ <b>Approval needed</b> (step ${info.step}): ${escapeHtml(info.actionDesc || '')}` +
+    `<div class="row" style="margin-top:6px">` +
+    `<button class="primary" style="margin:0;background:#1f7a35" id="apYes">✔ Approve</button>` +
+    `<button class="danger" style="margin:0" id="apNo">✘ Reject</button>` +
+    `</div>`;
+  el.log.appendChild(div);
+  el.log.scrollTop = el.log.scrollHeight;
+  div.querySelector('#apYes').addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'approval', approved: true });
+    div.remove();
+  });
+  div.querySelector('#apNo').addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'approval', approved: false });
+    div.remove();
+  });
+}
+
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
@@ -90,11 +137,13 @@ function escapeHtml(s) {
 chrome.runtime.sendMessage({ action: 'getState' }, (st) => {
   if (!st || st.error) return;
   if (st.isRunning) {
-    setStatus(true);
+    setStatus(true, !!st.paused);
     addLog('thought', `Agent is running task: <b>${escapeHtml(st.task)}</b>`);
     (st.history || []).forEach(h => {
       addLog('action', `#${h.step} <b>${escapeHtml(h.intent)}</b> → ${escapeHtml(h.result)}`);
     });
+    // Re-attach a pending approval prompt if the loop is waiting on the user
+    if (st.approvalPending) renderApprovalPrompt(st.approvalPending);
   }
 });
 
@@ -116,6 +165,15 @@ el.startBtn.addEventListener('click', () => {
       }
     }
   );
+});
+
+// Stop / Resume toggle: pause the loop at the next step boundary, resume on demand
+el.pauseBtn.addEventListener('click', () => {
+  if (agentPaused) {
+    chrome.runtime.sendMessage({ action: 'resumeAgent' });
+  } else {
+    chrome.runtime.sendMessage({ action: 'pauseAgent' });
+  }
 });
 
 el.stopBtn.addEventListener('click', () => {

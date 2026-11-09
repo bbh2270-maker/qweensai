@@ -22,7 +22,8 @@
   .row > div { flex:1; }
   button.primary { background:var(--accent); border:none; color:#fff; font-weight:600; cursor:pointer; margin-top:10px; }
   button.primary:hover { filter:brightness(1.1); }
-  button.danger { background:#7a1f1f; border:none; color:#fff; cursor:pointer; margin-top:8px; }
+  button.danger { background:#7a1f1f; border:none; color:#fff; cursor:pointer; }
+  #controlRow button { cursor:pointer; }
   #log { margin-top:12px; max-height:220px; overflow-y:auto; font-size:11.5px; line-height:1.5; }
   .entry { padding:6px 8px; border-radius:6px; background:var(--card); margin-bottom:6px; border-left:3px solid #2f353d; }
   .entry.thought { border-left-color:#4a9eff; }
@@ -63,10 +64,13 @@
   <textarea id="task" placeholder='e.g. "Search Google for the cheapest flight Dhaka to Dubai next week and tell me the price"'></textarea>
 
   <button class="primary" id="startBtn">▶ Start Agent</button>
-  <button class="danger" id="stopBtn" style="display:none">■ Stop</button>
+  <div class="row" id="controlRow" style="display:none; margin-top:8px">
+    <button id="pauseBtn">⏸ Pause / Resume</button>
+    <button class="danger" id="stopBtn">■ Stop</button>
+  </div>
 
   <details open>
-    <summary>Activity log</summary>
+    <summary>Activity timeline</summary>
     <div id="log"></div>
   </details>
 </main>
