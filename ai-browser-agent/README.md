@@ -22,7 +22,8 @@ Give it a task, and it opens its own tab, reads the page, clicks, types, navigat
 
 ## 🧑‍💻 Usage
 
-1. Pick provider → paste API key → (optionally change model)
+1. Paste API key(s) — the extension auto-picks the best available brain in this priority order:
+   **Claude → Gemini → Groq → OpenRouter**. If Claude has no key, Gemini automatically becomes the main driver. You can save keys for multiple providers at once (see "All provider keys" section); if one fails or runs out of quota mid-task, the agent falls back to the next one seamlessly.
 2. Type a task, e.g.:
    - *"Search Google for 'latest Python version' and tell me what it is"*
    - *"Go to github.com/trending and list the top 3 repos today"*

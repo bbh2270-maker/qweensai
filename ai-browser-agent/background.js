@@ -57,14 +57,55 @@ function notify(type, payload = {}) {
   chrome.runtime.sendMessage({ action: 'event', type, ...payload }).catch(() => {});
 }
 
+// ---- Provider registry & fallback chain ----
+// Priority: claude > gemini > groq > openrouter.
+// The agent automatically uses the FIRST provider that has a saved API key.
+// So if Claude is not configured, Gemini becomes the main driver (then Groq, then OpenRouter).
+const PROVIDER_DEFAULT_MODEL = {
+  claude: 'claude-sonnet-4-20250514',
+  gemini: 'gemini-2.0-flash',
+  groq: 'llama-3.3-70b-versatile',
+  openrouter: 'anthropic/claude-3.5-sonnet',
+};
+const PROVIDER_PRIORITY = ['claude', 'gemini', 'groq', 'openrouter'];
+
+// Build the list of usable providers from all saved keys, in priority order.
+async function resolveProviderChain(cfg) {
+  const stored = await chrome.storage.local.get(['providerKeys']);
+  const keys = stored.providerKeys || {};
+  const chain = [];
+  const seen = new Set();
+  // Explicitly chosen provider always goes first
+  if (cfg?.provider && cfg?.apiKey && PROVIDER_PRIORITY.includes(cfg.provider)) {
+    chain.push({ provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model || PROVIDER_DEFAULT_MODEL[cfg.provider] });
+    seen.add(cfg.provider);
+  }
+  for (const p of PROVIDER_PRIORITY) {
+    if (seen.has(p)) continue;
+    if (keys[p]) {
+      chain.push({ provider: p, apiKey: keys[p], model: PROVIDER_DEFAULT_MODEL[p] });
+      seen.add(p);
+    }
+  }
+  return chain;
+}
+
 async function startAgent(task, apiConfig) {
-  if (!task || !apiConfig?.apiKey) throw new Error('Task and API key are required');
+  if (!task) throw new Error('Task is required');
+  const chain = await resolveProviderChain(apiConfig || {});
+  if (!chain.length) throw new Error('No API key found — add at least one provider key (Claude / Gemini / Groq / OpenRouter) in Settings.');
   stopAgentState();
   state.isRunning = true;
   state.paused = false;
   state.task = task;
-  state.apiConfig = apiConfig;
+  state.apiConfig = apiConfig || {};
+  state.providerChain = chain;
+  state.providerIndex = 0;
+  state.apiConfig.provider = chain[0].provider;
+  state.apiConfig.apiKey = chain[0].apiKey;
+  state.apiConfig.model = chain[0].model;
   state.history = [];
+  notify('provider', { provider: chain[0].provider, model: chain[0].model, fallbacks: chain.slice(1).map(c => c.provider) });
 
   const tab = await chrome.tabs.create({ url: 'https://www.google.com', active: true });
   state.tabId = tab.id;
@@ -476,13 +517,31 @@ function buildUserPrompt(snapshot, step) {
 }
 
 async function askLLM(snapshot, step, screenshotB64) {
-  const cfg = state.apiConfig;
   const messages = [
     { role: 'system', content: buildSystemPrompt() },
     { role: 'user', content: buildUserPrompt(snapshot, step), image: screenshotB64 || null },
   ];
-  const raw = await callProvider(cfg, messages);
-  return parseAction(raw);
+  // Try each configured provider in priority order (claude > gemini > groq > openrouter).
+  // If the current one errors out (bad key, rate limit, quota), fall back to the next.
+  const chain = state.providerChain && state.providerChain.length
+    ? state.providerChain
+    : [state.apiConfig];
+  let lastErr = null;
+  for (let i = 0; i < chain.length; i++) {
+    const cfg = chain[i];
+    try {
+      const raw = await callProvider(cfg, messages);
+      if (i !== state.providerIndex) {
+        state.providerIndex = i;
+        notify('provider', { provider: cfg.provider, model: cfg.model, switched: true });
+      }
+      return parseAction(raw);
+    } catch (e) {
+      lastErr = e;
+      notify('provider_error', { provider: cfg.provider, error: String(e && e.message || e), fallback: chain[i + 1]?.provider || null });
+    }
+  }
+  throw new Error('All providers failed. Last error: ' + (lastErr && lastErr.message || 'unknown'));
 }
 
 async function callProvider(cfg, messages) {
