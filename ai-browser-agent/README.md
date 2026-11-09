@@ -29,13 +29,27 @@ Give it a task, and it opens its own tab, reads the page, clicks, types, navigat
 3. Press **▶ Start Agent** — a new tab opens and the agent drives it.
 4. Watch the log; final answer appears with 🏁.
 
-### API keys
+### API keys (কোন কোন site এর key লাগবে)
+
+**Abosshok (একটিই বেছে নিন — agent er "brain"):**
 | Provider | Where to get key | Default model |
 |---|---|---|
+| Claude (best, Claude-er moto perfect kajer jonno) | https://console.anthropic.com/settings/keys | `claude-sonnet-4-20250514` |
 | Gemini | https://aistudio.google.com/apikey | `gemini-2.0-flash` |
-| Claude | https://console.anthropic.com | `claude-sonnet-4-20250514` |
-| Groq | https://console.groq.com/keys | `llama-3.3-70b-versatile` |
-| OpenRouter | https://openrouter.ai/keys | `anthropic/claude-3.5-sonnet` |
+| Groq (fast + free tier) | https://console.groq.com/keys | `llama-3.3-70b-versatile` |
+| OpenRouter (ek jaygaya shob model) | https://openrouter.ai/keys | `anthropic/claude-3.5-sonnet` |
+
+**Optional (onko nirvul/perfect korar jonno):**
+| Service | Site / Key link | Ki korbe |
+|---|---|---|
+| Tavily (AI search) | https://app.tavily.com (free 1000 credits/mo) | Google bot-blocking evade kore reliable web search |
+| Serper.dev | https://serper.dev (free 2500 credits) | Real-time Google search results |
+| Firecrawl | https://firecrawl.dev (free tier) | Je-kono page clean markdown e pora (scraping) |
+| Browserless | https://browserless.io | Hosted headless browser (backup rendering) |
+| ElevenLabs | https://elevenlabs.io | Voice output (optional) |
+| Replicate | https://replicate.com | Image generation/editing (optional) |
+
+Note: LLM key chara ar kichu-i mandatory na — extension ta setup hisebe **1-ti LLM key** niyei cholbe. Baki tool key gulo input pathiyete reliability baray.
 
 ## 🗂 Files
 
