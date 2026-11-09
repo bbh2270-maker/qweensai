@@ -6,6 +6,7 @@ const el = {
   model: document.getElementById('model'),
   keyProviderLabel: document.getElementById('keyProviderLabel'),
   task: document.getElementById('task'),
+  parallelChk: document.getElementById('parallelChk'),
   startBtn: document.getElementById('startBtn'),
   stopBtn: document.getElementById('stopBtn'),
   statusBadge: document.getElementById('statusBadge'),
@@ -121,6 +122,18 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'provider_error':
       addLog('error', `⚠️ ${escapeHtml(providerNames[msg.provider] || msg.provider)} failed: ${escapeHtml(msg.error)}${msg.fallback ? ` → switching to ${escapeHtml(providerNames[msg.fallback] || msg.fallback)}` : ''}`);
       break;
+    case 'plan':
+      addLog('thought', `🗂️ <b>Plan:</b> ${escapeHtml(msg.summary)}<br>${(msg.subtasks || []).map((s, i) => `&nbsp;&nbsp;${i + 1}. ${escapeHtml(s)}`).join('<br>')}`);
+      break;
+    case 'worker_start':
+      addLog('action', `⚡ <b>Parallel worker</b> started in tab ${msg.tabId}: ${escapeHtml(msg.instruction)}`);
+      break;
+    case 'worker_step':
+      addLog('thought', `⚡ [${escapeHtml(String(msg.worker).slice(0, 6))}] 💭 ${escapeHtml(msg.thought || '')} → <b>${escapeHtml(msg.action?.intent || '?')}</b>`);
+      break;
+    case 'worker_done':
+      addLog('', `✅ <b>Worker ${escapeHtml(String(msg.worker).slice(0, 6))} finished:</b> ${escapeHtml(msg.outcome)}`);
+      break;
   }
 });
 
@@ -150,7 +163,7 @@ el.startBtn.addEventListener('click', () => {
   // Do NOT require the single apiKey field here: background builds the
   // provider chain from all saved keys (Claude first, else Gemini, Groq, OpenRouter).
   chrome.runtime.sendMessage(
-    { action: 'startAgent', task, apiConfig: { provider: el.provider.value, apiKey: el.apiKey.value.trim(), model: el.model.value.trim() } },
+    { action: 'startAgent', task, apiConfig: { provider: el.provider.value, apiKey: el.apiKey.value.trim(), model: el.model.value.trim(), parallel: el.parallelChk ? el.parallelChk.checked : true } },
     (res) => {
       if (res && res.ok === false) {
         addLog('error', escapeHtml(res.error));

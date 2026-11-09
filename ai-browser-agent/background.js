@@ -299,78 +299,193 @@ async function getElementBox(tabId, index) {
 
 // ---- The agent loop ----
 async function runLoop() {
-  for (let step = 1; step <= state.maxSteps && state.isRunning; step++) {
-    await pauseGate();
-    if (!state.isRunning) return;
+  // v4: task decomposition. Complex tasks are broken into subtasks; independent
+  // read-only subtasks run in PARALLEL across multiple tabs simultaneously.
+  const plan = await buildPlan(state.task);
+  const parallelizable = plan.parallel.length >= 2 && state.apiConfig.parallel !== false;
 
-    const tabId = state.tabId;
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab) { notify('error', { message: 'Agent tab was closed' }); return; }
+  if (!parallelizable) {
+    await sequentialLoop(plan.instructions);
+    return;
+  }
+
+  notify('plan', {
+    summary: `Task split into ${plan.subtasks.length} subtasks — ${plan.parallel.length} running in parallel tabs, ${plan.serial.length} sequential.`,
+    subtasks: plan.subtasks.map(s => s.instruction),
+  });
+
+  // ---- Phase 1: parallel fan-out (independent research/read subtasks) ----
+  const workers = plan.parallel.map((st, i) => spawnWorker(st, i));
+  let results = await Promise.allSettled(workers);
+
+  // ---- Phase 2: merge findings + finish remaining serial steps ----
+  const findings = results.map((r, i) => ({
+    subtask: plan.parallel[i].instruction,
+    outcome: r.status === 'fulfilled' ? r.value : ('FAILED: ' + String(r.reason?.message || r.reason)),
+  }));
+  state.findings = findings;
+
+  for (const st of plan.serial) {
+    if (!state.isRunning) break;
+    await sequentialLoop(st.instruction);
+  }
+
+  if (!state.isRunning) return;
+  const finalAnswer = await synthesizeFinal(plan.task, findings);
+  notify('answer', { answer: finalAnswer });
+}
+
+// Run one worker subtask in its own tab, concurrently with other workers.
+async function spawnWorker(subtask, index) {
+  const t = await chrome.tabs.create({ url: 'https://www.google.com', active: false });
+  if (state.groupId != null) { try { await chrome.tabs.group({ tabIds: [t.id], groupId: state.groupId }); } catch (e) {} }
+  const w = {
+    id: 'w' + index + '-' + Date.now(),
+    instruction: subtask.instruction,
+    goal: state.task,           // keep the overall goal visible to the model
+    tabId: t.id,
+    history: [],
+    stepsLeft: Math.min(10, state.maxSteps),
+  };
+  notify('worker_start', { worker: w.id, instruction: w.instruction, tabId: t.id });
+  try {
+    const outcome = await runWorker(w);
+    notify('worker_done', { worker: w.id, outcome: String(outcome).slice(0, 300) });
+    return outcome;
+  } finally {
+    // free resources; close the worker tab unless it's the main tab
+    if (w.tabId !== state.tabId) chrome.tabs.remove(w.tabId).catch(() => {});
+  }
+}
+
+async function runWorker(w) {
+  while (w.stepsLeft > 0 && state.isRunning) {
+    await pauseGate();
+    if (!state.isRunning) break;
+    w.stepsLeft--;
+
+    const tab = await chrome.tabs.get(w.tabId).catch(() => null);
+    if (!tab) throw new Error('worker tab was closed');
     if (isBlockedUrl(tab.url)) {
-      record(step, 'blocked', { intent: 'navigate', url: 'https://www.google.com' }, 'Cannot operate on browser-protected pages');
-      await chrome.tabs.update(tabId, { url: 'https://www.google.com' });
-      await waitTabComplete(tabId);
+      await chrome.tabs.update(w.tabId, { url: 'https://www.google.com' });
+      await waitTabComplete(w.tabId);
       continue;
     }
 
-    await waitTabComplete(tabId);
-    const snapshot = await getSnapshot(tabId);
-    const screenshotB64 = state.apiConfig.vision ? await captureScreenshot(tabId) : null;
-    const decision = await askLLM(snapshot, step, screenshotB64);
+    await waitTabComplete(w.tabId);
+    const snapshot = await getSnapshot(w.tabId);
+    const screenshotB64 = state.apiConfig.vision ? await captureScreenshot(w.tabId) : null;
+    const decision = await askLLM(snapshot, w.history.length + 1, screenshotB64, w);
 
-    notify('step', { step, thought: decision.thought, action: decision.action || { intent: decision.intent, url: decision.url, tab_index: decision.tab_index } });
+    notify('worker_step', {
+      worker: w.id, step: w.history.length + 1,
+      thought: decision.thought,
+      action: decision.action || { intent: decision.intent, url: decision.url, tab_index: decision.tab_index },
+    });
 
     if (decision.intent === 'done') {
-      record(step, 'done', {}, decision.answer || 'Task complete');
-      notify('answer', { answer: decision.answer || 'Task complete.' });
-      return;
-    }
-
-    // Human approval gate (optional per-setting, forced for risky intents)
-    const risky = ['form_fill', 'drag_drop'].includes(decision.intent) ||
-                  (decision.intent === 'click' && /pay|submit|delete|send|purchase/i.test(JSON.stringify(decision.action)));
-    if (state.apiConfig.approvalMode === 'all' || (state.apiConfig.approvalMode === 'risky' && risky)) {
-      const answer = await requestApproval({
-        step, thought: decision.thought,
-        actionDesc: describeDecision(decision, snapshot),
-      });
-      if (!state.isRunning) return;
-      notify('approval_result', { step, approved: answer.approved, note: answer.note });
-      if (!answer.approved) {
-        record(step, 'skipped', decision.action || {}, 'User rejected this action' + (answer.note ? ': ' + answer.note : ''));
-        continue;
-      }
+      w.history.push({ step: w.history.length + 1, intent: 'done', result: decision.answer || 'complete' });
+      return decision.answer || 'Subtask finished.';
     }
 
     let result;
     if (decision.intent === 'navigate') {
-      await chrome.tabs.update(tabId, { url: decision.url });
-      await waitTabComplete(tabId);
+      await chrome.tabs.update(w.tabId, { url: decision.url });
+      await waitTabComplete(w.tabId);
       result = { ok: true, detail: 'Navigated to ' + decision.url };
     } else if (['back', 'forward', 'reload'].includes(decision.intent)) {
-      result = await handleNavHistory(tabId, decision.intent);
-    } else if (decision.intent === 'new_tab') {
-      result = await handleNewTab(decision);
-    } else if (decision.intent === 'switch_tab') {
-      result = await handleSwitchTab(decision);
-    } else if (decision.intent === 'close_tab') {
-      result = await handleCloseTab(decision);
-    } else if (decision.intent === 'drag_drop' && state.apiConfig.useCdp !== false) {
-      result = await handleDragDrop(tabId, decision.action);
-    } else if (decision.intent === 'click' && state.apiConfig.useCdp !== false) {
-      // Visual path: real human-like cursor movement via CDP, then click
-      result = await handleRealClick(tabId, decision.action);
+      result = await handleNavHistory(w.tabId, decision.intent);
     } else {
-      result = await execAction(tabId, decision.action || { intent: decision.intent, ...decision });
+      result = await execAction(w.tabId, decision.action || { intent: decision.intent, ...decision });
       await sleep(800);
-      await waitTabComplete(tabId, 8000);
+      await waitTabComplete(w.tabId, 8000);
     }
-
-    record(step, decision.intent, decision.action || { url: decision.url, tab_index: decision.tab_index },
-      result.detail || JSON.stringify(result).slice(0, 200), decision.thought);
-    notify('action_result', { step, result });
+    w.history.push({ step: w.history.length + 1, intent: decision.intent, result: result.detail || JSON.stringify(result).slice(0, 200) });
+    notify('worker_result', { worker: w.id, result });
   }
-  notify('answer', { answer: 'Stopped: reached max steps without completing the task.' });
+  return 'Stopped before finishing (max worker steps reached or agent stopped).';
+}
+
+// Merge worker findings + execute the final single-threaded phase.
+async function sequentialLoop(instruction) {
+  const savedTask = state.task;
+  state.task = instruction;
+  try {
+    for (let step = 1; step <= state.maxSteps && state.isRunning; step++) {
+      await pauseGate();
+      if (!state.isRunning) return;
+
+      const tabId = state.tabId;
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (!tab) { notify('error', { message: 'Agent tab was closed' }); return; }
+      if (isBlockedUrl(tab.url)) {
+        record(step, 'blocked', { intent: 'navigate', url: 'https://www.google.com' }, 'Cannot operate on browser-protected pages');
+        await chrome.tabs.update(tabId, { url: 'https://www.google.com' });
+        await waitTabComplete(tabId);
+        continue;
+      }
+
+      await waitTabComplete(tabId);
+      const snapshot = await getSnapshot(tabId);
+      const screenshotB64 = state.apiConfig.vision ? await captureScreenshot(tabId) : null;
+      const decision = await askLLM(snapshot, step, screenshotB64);
+
+      notify('step', { step, thought: decision.thought, action: decision.action || { intent: decision.intent, url: decision.url, tab_index: decision.tab_index } });
+
+      if (decision.intent === 'done') {
+        record(step, 'done', {}, decision.answer || 'Task complete');
+        notify('answer', { answer: decision.answer || 'Task complete.' });
+        return;
+      }
+
+      // Human approval gate (optional per-setting, forced for risky intents)
+      const risky = ['form_fill', 'drag_drop'].includes(decision.intent) ||
+                    (decision.intent === 'click' && /pay|submit|delete|send|purchase/i.test(JSON.stringify(decision.action)));
+      if (state.apiConfig.approvalMode === 'all' || (state.apiConfig.approvalMode === 'risky' && risky)) {
+        const answer = await requestApproval({
+          step, thought: decision.thought,
+          actionDesc: describeDecision(decision, snapshot),
+        });
+        if (!state.isRunning) return;
+        notify('approval_result', { step, approved: answer.approved, note: answer.note });
+        if (!answer.approved) {
+          record(step, 'skipped', decision.action || {}, 'User rejected this action' + (answer.note ? ': ' + answer.note : ''));
+          continue;
+        }
+      }
+
+      let result;
+      if (decision.intent === 'navigate') {
+        await chrome.tabs.update(tabId, { url: decision.url });
+        await waitTabComplete(tabId);
+        result = { ok: true, detail: 'Navigated to ' + decision.url };
+      } else if (['back', 'forward', 'reload'].includes(decision.intent)) {
+        result = await handleNavHistory(tabId, decision.intent);
+      } else if (decision.intent === 'new_tab') {
+        result = await handleNewTab(decision);
+      } else if (decision.intent === 'switch_tab') {
+        result = await handleSwitchTab(decision);
+      } else if (decision.intent === 'close_tab') {
+        result = await handleCloseTab(decision);
+      } else if (decision.intent === 'drag_drop' && state.apiConfig.useCdp !== false) {
+        result = await handleDragDrop(tabId, decision.action);
+      } else if (decision.intent === 'click' && state.apiConfig.useCdp !== false) {
+        // Visual path: real human-like cursor movement via CDP, then click
+        result = await handleRealClick(tabId, decision.action);
+      } else {
+        result = await execAction(tabId, decision.action || { intent: decision.intent, ...decision });
+        await sleep(800);
+        await waitTabComplete(tabId, 8000);
+      }
+
+      record(step, decision.intent, decision.action || { url: decision.url, tab_index: decision.tab_index },
+        result.detail || JSON.stringify(result).slice(0, 200), decision.thought);
+      notify('action_result', { step, result });
+    }
+    notify('answer', { answer: 'Stopped: reached max steps without completing the task.' });
+  } finally {
+    state.task = savedTask;
+  }
 }
 
 async function handleRealClick(tabId, action) {
@@ -481,9 +596,12 @@ function record(step, intent, action, result, thought = '') {
 }
 
 // ---- LLM providers ----
-function buildSystemPrompt() {
+function buildSystemPrompt(worker = null) {
+  const taskLine = worker
+    ? `Overall user goal: "${worker.goal}"\nYOUR assigned subtask (work ONLY on this): "${worker.instruction}"\nYou are one of several parallel workers running in separate tabs. Other agents handle other parts. When your subtask is answered, use "done" with a concise factual summary of what you found.`
+    : `Current user task: "${state.task}"`;
   return `You are an autonomous web-browsing agent operating a real Chrome browser, similar to "Claude for Chrome".
-Current user task: "${state.task}"
+${taskLine}
 
 You receive a page snapshot: URL, TITLE, visible text, open-tab list, and numbered interactive elements like [12] <button> "Sign in" (built from the accessibility tree: role + accessible name).
 On each turn, reply with ONLY a JSON object (no markdown fences, no extra text) of one of these shapes:
@@ -497,29 +615,77 @@ On each turn, reply with ONLY a JSON object (no markdown fences, no extra text) 
 {"thought":"...","intent":"extract","selector":".product-title"}
 {"thought":"...","intent":"navigate","url":"https://example.com"}
 {"thought":"...","intent":"back"} | {"thought":"...","intent":"forward"} | {"thought":"...","intent":"reload"}
-{"thought":"...","intent":"new_tab","url":"https://example.com"}
+${worker ? '' : `{"thought":"...","intent":"new_tab","url":"https://example.com"}
 {"thought":"...","intent":"switch_tab","tab_index":2}
 {"thought":"...","intent":"close_tab","tab_index":3}
-{"thought":"...","intent":"done","answer":"final answer for the user"}
+`}{"thought":"...","intent":"done","answer":"final answer for the user"}
 
 Rules:
-- Use EXACTLY ONE action per turn. Prefer searching via Google when the task involves finding information.
+- Use EXACTLY ONE action per turn. Prefer searching via Google when the task involves finding information.${worker ? '\n- You are a PARALLEL WORKER: only read-only actions (navigate, type/search, click links, scroll, extract). Never fill forms, never buy/submit/delete anything, never switch or close tabs.' : ''}
 - Element indexes refer to the latest snapshot only. Tab indexes refer to the OPEN TABS list in the snapshot.
 - For multi-field forms use form_fill instead of many separate type actions.
 - If the task is finished or impossible, use "done" with a helpful answer.
 - Never access chrome:// or web store pages.`;
 }
 
-function buildUserPrompt(snapshot, step) {
-  const recent = state.history.slice(-6).map(h =>
+function buildUserPrompt(snapshot, step, worker = null) {
+  const recent = (worker ? worker.history : state.history).slice(-6).map(h =>
     `step ${h.step}: ${h.intent} -> ${h.result}`).join('\n');
   return `Step ${step}. Recent actions:\n${recent || '(none)'}\n\nCURRENT PAGE SNAPSHOT:\n${snapshot}\n\nRespond with one JSON action.`;
 }
 
-async function askLLM(snapshot, step, screenshotB64) {
+// ---- Planner: decompose the task into parallel-safe + sequential subtasks ----
+async function buildPlan(task) {
+  const fallback = { task, instructions: task, subtasks: [], parallel: [], serial: [] };
+  if (state.apiConfig.parallel === false) return fallback;
+  // Cheap heuristic first: don't waste an LLM call on obviously simple tasks.
+  if (!/\b(and|compare|versus|vs\.?|also|plus|both)\b|[;,]/i.test(task) || task.length < 60) {
+    return fallback;
+  }
+  try {
+    const raw = await callProvider(chainHead(), [{
+      role: 'system',
+      content: 'You are a task planner for a browser agent. Split the user task into at most 3 SUBTASKS. Reply ONLY with JSON: {"subtasks":[{"instruction":"...","parallel":true}]}. parallel=true means the subtask is independent read-only research that can run simultaneously in its own tab; false means it depends on other steps or changes state (buying, filling forms, posting). Simple single-goal tasks get exactly one subtask with parallel=false.',
+    }, { role: 'user', content: 'Task: ' + task }]);
+    const m = String(raw).match(/\{[\s\S]*\}/);
+    if (!m) return fallback;
+    const obj = JSON.parse(m[0]);
+    const subtasks = (obj.subtasks || []).filter(s => s && s.instruction);
+    if (subtasks.length < 2) return fallback;
+    const capped = subtasks.slice(0, 3);
+    return {
+      task,
+      instructions: task,
+      subtasks: capped,
+      parallel: capped.filter(s => s.parallel === true),
+      serial: capped.filter(s => s.parallel !== true),
+    };
+  } catch (e) {
+    return fallback; // planning failure must never block the actual task
+  }
+}
+
+function chainHead() {
+  return (state.providerChain && state.providerChain[state.providerIndex]) || state.apiConfig;
+}
+
+// ---- Synthesizer: merge parallel worker findings into one final answer ----
+async function synthesizeFinal(task, findings) {
+  try {
+    const raw = await callProvider(chainHead(), [{
+      role: 'system',
+      content: 'You merge the findings of several parallel browser research workers into ONE clear, complete answer for the user. Be faithful to the findings; note anything that failed.',
+    }, { role: 'user', content: `User task: ${task}\n\nWorker findings:\n${JSON.stringify(findings, null, 2).slice(0, 6000)}\n\nWrite the final answer.` }]);
+    return String(raw).replace(/^```.*$/g, '').trim();
+  } catch (e) {
+    return 'Parallel results:\n' + findings.map(f => `- ${f.subtask}\n  → ${f.outcome}`).join('\n');
+  }
+}
+
+async function askLLM(snapshot, step, screenshotB64, worker = null) {
   const messages = [
-    { role: 'system', content: buildSystemPrompt() },
-    { role: 'user', content: buildUserPrompt(snapshot, step), image: screenshotB64 || null },
+    { role: 'system', content: buildSystemPrompt(worker) },
+    { role: 'user', content: buildUserPrompt(snapshot, step, worker), image: screenshotB64 || null },
   ];
   // Try each configured provider in priority order (claude > gemini > groq > openrouter).
   // If the current one errors out (bad key, rate limit, quota), fall back to the next.
