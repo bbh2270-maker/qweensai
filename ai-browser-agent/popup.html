@@ -43,7 +43,7 @@
 <main>
   <div class="row">
     <div>
-      <label>Provider</label>
+      <label>Provider (auto: Claude &gt; Gemini &gt; Groq &gt; OpenRouter)</label>
       <select id="provider">
         <option value="gemini">Google Gemini</option>
         <option value="claude">Anthropic Claude</option>
@@ -56,11 +56,25 @@
       <input id="model" placeholder="model name">
     </div>
   </div>
-  <label>API Key</label>
+  <label>API Key — <span id="keyProviderLabel">Gemini</span></label>
   <input id="apiKey" type="password" placeholder="paste your API key">
+
+  <details>
+    <summary>All provider keys (fallback chain)</summary>
+    <p style="font-size:11px;opacity:.7;margin:4px 0;">Keys saved here are auto-detected. The agent always uses the best available brain: if Claude's key exists it leads, otherwise Gemini takes the main role, then Groq, then OpenRouter.</p>
+    <label>Claude key</label><input id="key_claude" type="password" placeholder="sk-ant-...">
+    <label>Gemini key</label><input id="key_gemini" type="password" placeholder="AIza...">
+    <label>Groq key</label><input id="key_groq" type="password" placeholder="gsk_...">
+    <label>OpenRouter key</label><input id="key_openrouter" type="password" placeholder="sk-or-...">
+  </details>
 
   <label>Task</label>
   <textarea id="task" placeholder='e.g. "Search Google for the cheapest flight Dhaka to Dubai next week and tell me the price"'></textarea>
+
+  <label style="display:flex;align-items:center;gap:6px;margin-top:8px;">
+    <input type="checkbox" id="parallelChk" checked style="width:auto;">
+    Parallel mode — split complex tasks into subtasks and run independent research in multiple tabs at once
+  </label>
 
   <button class="primary" id="startBtn">▶ Start Agent</button>
   <button class="danger" id="stopBtn" style="display:none">■ Stop</button>

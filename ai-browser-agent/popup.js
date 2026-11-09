@@ -4,11 +4,19 @@ const el = {
   provider: document.getElementById('provider'),
   apiKey: document.getElementById('apiKey'),
   model: document.getElementById('model'),
+  keyProviderLabel: document.getElementById('keyProviderLabel'),
   task: document.getElementById('task'),
+  parallelChk: document.getElementById('parallelChk'),
   startBtn: document.getElementById('startBtn'),
   stopBtn: document.getElementById('stopBtn'),
   statusBadge: document.getElementById('statusBadge'),
   log: document.getElementById('log'),
+  keys: {
+    claude: document.getElementById('key_claude'),
+    gemini: document.getElementById('key_gemini'),
+    groq: document.getElementById('key_groq'),
+    openrouter: document.getElementById('key_openrouter'),
+  },
 };
 
 const defaultModels = {
@@ -18,21 +26,50 @@ const defaultModels = {
   openrouter: 'anthropic/claude-3.5-sonnet',
 };
 
+const providerNames = { claude: 'Claude', gemini: 'Gemini', groq: 'Groq', openrouter: 'OpenRouter' };
+
 // ---- load / save settings ----
-chrome.storage.local.get(['settings'], (res) => {
+chrome.storage.local.get(['settings', 'providerKeys'], (res) => {
   const s = res.settings || {};
+  const pk = res.providerKeys || {};
   if (s.provider) el.provider.value = s.provider;
-  if (s.apiKey) el.apiKey.value = s.apiKey;
+  // Main key field mirrors the selected provider's saved key
+  el.apiKey.value = pk[s.provider] || s.apiKey || '';
   el.model.value = s.model || defaultModels[el.provider.value];
+  for (const p of Object.keys(el.keys)) {
+    if (pk[p]) el.keys[p].value = pk[p];
+  }
+  updateKeyLabel();
 });
+
+function updateKeyLabel() {
+  if (el.keyProviderLabel) el.keyProviderLabel.textContent = providerNames[el.provider.value] || el.provider.value;
+}
 
 el.provider.addEventListener('change', () => {
   el.model.value = defaultModels[el.provider.value] || '';
+  // swap main key input to the saved key of the newly selected provider
+  chrome.storage.local.get(['providerKeys'], (res) => {
+    const pk = res.providerKeys || {};
+    el.apiKey.value = pk[el.provider.value] || '';
+    updateKeyLabel();
+  });
 });
 
 function saveSettings() {
+  // Collect every provider key so background can build the fallback chain:
+  // Claude first if present, otherwise Gemini leads, then Groq, then OpenRouter.
+  const providerKeys = {};
+  for (const p of Object.keys(el.keys)) {
+    const v = el.keys[p].value.trim();
+    if (v) providerKeys[p] = v;
+  }
+  // The main input always belongs to the currently selected provider
+  const mainKey = el.apiKey.value.trim();
+  if (mainKey) providerKeys[el.provider.value] = mainKey;
   chrome.storage.local.set({
-    settings: { provider: el.provider.value, apiKey: el.apiKey.value, model: el.model.value },
+    providerKeys,
+    settings: { provider: el.provider.value, apiKey: mainKey, model: el.model.value },
   });
 }
 
@@ -79,6 +116,24 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'finished':
       setStatus(false);
       break;
+    case 'provider':
+      addLog('thought', `🧠 Brain: <b>${escapeHtml(providerNames[msg.provider] || msg.provider)}</b> (${escapeHtml(msg.model)})${msg.switched ? ' — auto-switched' : ''}${(msg.fallbacks && msg.fallbacks.length) ? ` · fallbacks: ${escapeHtml(msg.fallbacks.join(', '))}` : ''}`);
+      break;
+    case 'provider_error':
+      addLog('error', `⚠️ ${escapeHtml(providerNames[msg.provider] || msg.provider)} failed: ${escapeHtml(msg.error)}${msg.fallback ? ` → switching to ${escapeHtml(providerNames[msg.fallback] || msg.fallback)}` : ''}`);
+      break;
+    case 'plan':
+      addLog('thought', `🗂️ <b>Plan:</b> ${escapeHtml(msg.summary)}<br>${(msg.subtasks || []).map((s, i) => `&nbsp;&nbsp;${i + 1}. ${escapeHtml(s)}`).join('<br>')}`);
+      break;
+    case 'worker_start':
+      addLog('action', `⚡ <b>Parallel worker</b> started in tab ${msg.tabId}: ${escapeHtml(msg.instruction)}`);
+      break;
+    case 'worker_step':
+      addLog('thought', `⚡ [${escapeHtml(String(msg.worker).slice(0, 6))}] 💭 ${escapeHtml(msg.thought || '')} → <b>${escapeHtml(msg.action?.intent || '?')}</b>`);
+      break;
+    case 'worker_done':
+      addLog('', `✅ <b>Worker ${escapeHtml(String(msg.worker).slice(0, 6))} finished:</b> ${escapeHtml(msg.outcome)}`);
+      break;
   }
 });
 
@@ -101,14 +156,14 @@ chrome.runtime.sendMessage({ action: 'getState' }, (st) => {
 // ---- buttons ----
 el.startBtn.addEventListener('click', () => {
   const task = el.task.value.trim();
-  const apiKey = el.apiKey.value.trim();
   if (!task) { addLog('error', 'Please enter a task.'); return; }
-  if (!apiKey) { addLog('error', 'Please enter an API key.'); return; }
   saveSettings();
   el.log.innerHTML = '';
   setStatus(true);
+  // Do NOT require the single apiKey field here: background builds the
+  // provider chain from all saved keys (Claude first, else Gemini, Groq, OpenRouter).
   chrome.runtime.sendMessage(
-    { action: 'startAgent', task, apiConfig: { provider: el.provider.value, apiKey, model: el.model.value.trim() } },
+    { action: 'startAgent', task, apiConfig: { provider: el.provider.value, apiKey: el.apiKey.value.trim(), model: el.model.value.trim(), parallel: el.parallelChk ? el.parallelChk.checked : true } },
     (res) => {
       if (res && res.ok === false) {
         addLog('error', escapeHtml(res.error));

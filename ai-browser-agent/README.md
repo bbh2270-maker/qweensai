@@ -12,6 +12,7 @@ Give it a task, and it opens its own tab, reads the page, clicks, types, navigat
 - 🎯 Live highlight of elements being clicked so you can watch the agent work
 - 📜 Real-time activity log (thoughts + actions + results) in the popup
 - ⏹ Stop button anytime; settings (provider/key/model) saved locally via `chrome.storage`
+- ⚡ **Parallel multi-worker mode (v4)**: complex tasks are auto-decomposed by a Planner into up to 3 subtasks. Independent read-only research subtasks run **simultaneously in separate tabs** (Promise.allSettled fan-out), then a Synthesizer merges all worker findings into one final answer. Toggle with the "Parallel mode" checkbox. Risky/state-changing steps always stay sequential & supervised.
 
 ## 🚀 Install (Developer Mode)
 
@@ -22,20 +23,48 @@ Give it a task, and it opens its own tab, reads the page, clicks, types, navigat
 
 ## 🧑‍💻 Usage
 
-1. Pick provider → paste API key → (optionally change model)
+1. Paste API key(s) — the extension auto-picks the best available brain in this priority order:
+   **Claude → Gemini → Groq → OpenRouter**. If Claude has no key, Gemini automatically becomes the main driver. You can save keys for multiple providers at once (see "All provider keys" section); if one fails or runs out of quota mid-task, the agent falls back to the next one seamlessly.
 2. Type a task, e.g.:
    - *"Search Google for 'latest Python version' and tell me what it is"*
    - *"Go to github.com/trending and list the top 3 repos today"*
 3. Press **▶ Start Agent** — a new tab opens and the agent drives it.
 4. Watch the log; final answer appears with 🏁.
 
-### API keys
+### API keys (কোন কোন site এর key লাগবে)
+
+> **Apatoto regular free trial diyei cholbe — kono paid plan lagbe na.** Niche kon provider er free limit koto, ta likhe dilam:
+>
+> | Provider | Free limit (trial/tier) | Koto din cholbe |
+> |---|---|---|
+> | **Gemini** ⭐ recommended | Gemini 2.0 Flash: **15 requests/min, ~1500 requests/day FREE**, card lagbe na | Anonto kal (renewable daily) |
+> | **Groq** | Llama-3.3-70B: **~8000 tokens/min, free daily quota (~hajar hajar request)** | Daily reset hoy, onek din cholbe |
+> | **OpenRouter** | $1 free credits (onek free model o ache: `meta-llama/llama-3.3-70b-instruct:free`) | Jotokhon credit thakbe |
+> | **Claude** (console.anthropic.com) | Free tier nei — demo/key holeo pay-as-you-go; Playground e free try kora jay | Paid only |
+> | Tavily (optional) | 1000 credits/month free | Monthly reset |
+> | Serper (optional) | 2500 credits ekbar | Ekbare sesh |
+>
+> **Sobcheye bhalo free combo:** Gemini (aistudio.google.com/apikey) main brain + Groq backup. Duitai free, daily quota roroe, ar extension settings theke provider change kora jay. Claude key tele paise lagbe — apatoto free-te Gemini/Groq-i enough.
+
+**Abosshok (একটিই বেছে নিন — agent er "brain"):**
 | Provider | Where to get key | Default model |
 |---|---|---|
+| Claude (best, Claude-er moto perfect kajer jonno) | https://console.anthropic.com/settings/keys | `claude-sonnet-4-20250514` |
 | Gemini | https://aistudio.google.com/apikey | `gemini-2.0-flash` |
-| Claude | https://console.anthropic.com | `claude-sonnet-4-20250514` |
-| Groq | https://console.groq.com/keys | `llama-3.3-70b-versatile` |
-| OpenRouter | https://openrouter.ai/keys | `anthropic/claude-3.5-sonnet` |
+| Groq (fast + free tier) | https://console.groq.com/keys | `llama-3.3-70b-versatile` |
+| OpenRouter (ek jaygaya shob model) | https://openrouter.ai/keys | `anthropic/claude-3.5-sonnet` |
+
+**Optional (onko nirvul/perfect korar jonno):**
+| Service | Site / Key link | Ki korbe |
+|---|---|---|
+| Tavily (AI search) | https://app.tavily.com (free 1000 credits/mo) | Google bot-blocking evade kore reliable web search |
+| Serper.dev | https://serper.dev (free 2500 credits) | Real-time Google search results |
+| Firecrawl | https://firecrawl.dev (free tier) | Je-kono page clean markdown e pora (scraping) |
+| Browserless | https://browserless.io | Hosted headless browser (backup rendering) |
+| ElevenLabs | https://elevenlabs.io | Voice output (optional) |
+| Replicate | https://replicate.com | Image generation/editing (optional) |
+
+Note: LLM key chara ar kichu-i mandatory na — extension ta setup hisebe **1-ti LLM key** niyei cholbe. Baki tool key gulo input pathiyete reliability baray.
 
 ## 🗂 Files
 
