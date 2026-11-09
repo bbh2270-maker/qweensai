@@ -495,7 +495,7 @@ async function callProvider(cfg, messages) {
   const sys = messages[0].content, userMsg = messages[1];
 
   if (cfg.provider === 'gemini') {
-    const model = cfg.model || 'gemini-2.0-flash';
+    const model = cfg.model || 'gemini-2.5-flash';
     const parts = [{ text: sys + '\n\n' + userMsg.content }];
     if (userMsg.image) parts.push({ inlineData: { mimeType: 'image/jpeg', data: userMsg.image } });
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cfg.apiKey}`, {
@@ -518,7 +518,7 @@ async function callProvider(cfg, messages) {
       method: 'POST',
       headers: { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: cfg.model || 'claude-sonnet-4-20250514',
+        model: cfg.model || 'claude-sonnet-4-5-20250918',
         max_tokens: 700,
         system: sys,
         messages: [{ role: 'user', content }],
@@ -532,7 +532,7 @@ async function callProvider(cfg, messages) {
     const base = cfg.provider === 'groq'
       ? 'https://api.groq.com/openai/v1/chat/completions'
       : 'https://openrouter.ai/api/v1/chat/completions';
-    const defaultModel = cfg.provider === 'groq' ? 'llama-3.3-70b-versatile' : 'anthropic/claude-3.5-sonnet';
+    const defaultModel = cfg.provider === 'groq' ? 'meta-llama/llama-4-scout-17b-16e-instruct' : 'google/gemini-2.5-flash';
     const openMessages = [
       { role: 'system', content: sys },
       { role: 'user', content: userMsg.image

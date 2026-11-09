@@ -6,6 +6,7 @@ const el = {
   provider: document.getElementById('provider'),
   apiKey: document.getElementById('apiKey'),
   model: document.getElementById('model'),
+  modelHint: document.getElementById('modelHint'),
   task: document.getElementById('task'),
   startBtn: document.getElementById('startBtn'),
   controlRow: document.getElementById('controlRow'),
@@ -19,22 +20,37 @@ let agentRunning = false;
 let agentPaused = false;
 
 const defaultModels = {
-  gemini: 'gemini-2.0-flash',
-  claude: 'claude-sonnet-4-20250514',
-  groq: 'llama-3.3-70b-versatile',
-  openrouter: 'anthropic/claude-3.5-sonnet',
+  gemini: 'gemini-2.5-flash',
+  claude: 'claude-sonnet-4-5-20250918',
+  groq: 'meta-llama/llama-4-scout-17b-16e-instruct',
+  openrouter: 'google/gemini-2.5-flash',
+};
+
+// Suggested models per provider (shown as a hint under the Model field).
+// Any model name can be typed manually - all four providers accept it.
+const modelHints = {
+  gemini: 'Try: gemini-2.5-flash · gemini-2.5-pro · gemini-2.0-flash',
+  claude: 'Try: claude-sonnet-4-5-20250918 · claude-opus-4-1-20250805 · claude-3-5-sonnet-20241022',
+  groq: 'Vision: meta-llama/llama-4-scout-17b-16e-instruct · Text-only: llama-3.3-70b-versatile',
+  openrouter: 'Any model works: anthropic/claude-sonnet-4.5 · google/gemini-2.5-flash · openai/gpt-4o',
 };
 
 // ---- load / save settings ----
+function refreshModelHint() {
+  if (el.modelHint) el.modelHint.textContent = modelHints[el.provider.value] || '';
+}
+
 chrome.storage.local.get(['settings'], (res) => {
   const s = res.settings || {};
   if (s.provider) el.provider.value = s.provider;
   if (s.apiKey) el.apiKey.value = s.apiKey;
   el.model.value = s.model || defaultModels[el.provider.value];
+  refreshModelHint();
 });
 
 el.provider.addEventListener('change', () => {
   el.model.value = defaultModels[el.provider.value] || '';
+  refreshModelHint();
 });
 
 function saveSettings() {

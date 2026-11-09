@@ -40,10 +40,12 @@ Give it a task, and it opens its own tab, reads the page, clicks, types, navigat
 ### API keys
 | Provider | Where to get key | Default model |
 |---|---|---|
-| Gemini | https://aistudio.google.com/apikey | `gemini-2.0-flash` |
-| Claude | https://console.anthropic.com | `claude-sonnet-4-20250514` |
-| Groq | https://console.groq.com/keys | `llama-3.3-70b-versatile` |
-| OpenRouter | https://openrouter.ai/keys | `anthropic/claude-3.5-sonnet` |
+| Gemini | https://aistudio.google.com/apikey | `gemini-2.5-flash` |
+| Claude | https://console.anthropic.com | `claude-sonnet-4-5-20250918` |
+| Groq | https://console.groq.com/keys | `meta-llama/llama-4-scout-17b-16e-instruct` (vision) |
+| OpenRouter | https://openrouter.ai/keys | `google/gemini-2.5-flash` |
+
+Any model name can be typed manually — the Model field is free-form and each provider accepts all of its models (e.g. `gemini-2.5-pro`, `claude-opus-4-1-20250805`, `openai/gpt-4o` via OpenRouter). Vision-capable models receive screenshots; text-only models fall back to the accessibility-tree snapshot.
 
 ## 🗂 Files
 
